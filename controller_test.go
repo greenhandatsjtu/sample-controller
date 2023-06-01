@@ -19,11 +19,11 @@ package main
 import (
 	"context"
 	"fmt"
+	batchv1 "k8s.io/api/batch/v1"
 	"reflect"
 	"testing"
 	"time"
 
-	apps "k8s.io/api/apps/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -51,8 +51,8 @@ type fixture struct {
 	client     *fake.Clientset
 	kubeclient *k8sfake.Clientset
 	// Objects to put in the store.
-	fooLister        []*samplecontroller.Foo
-	deploymentLister []*apps.Deployment
+	fooLister []*samplecontroller.Foo
+	jobLister []*batchv1.Job
 	// Actions expected to happen on the client.
 	kubeactions []core.Action
 	actions     []core.Action
@@ -69,7 +69,7 @@ func newFixture(t *testing.T) *fixture {
 	return f
 }
 
-func newFoo(name string, replicas *int32) *samplecontroller.Foo {
+func newFoo(name string) *samplecontroller.Foo {
 	return &samplecontroller.Foo{
 		TypeMeta: metav1.TypeMeta{APIVersion: samplecontroller.SchemeGroupVersion.String()},
 		ObjectMeta: metav1.ObjectMeta{
@@ -77,8 +77,8 @@ func newFoo(name string, replicas *int32) *samplecontroller.Foo {
 			Namespace: metav1.NamespaceDefault,
 		},
 		Spec: samplecontroller.FooSpec{
-			DeploymentName: fmt.Sprintf("%s-deployment", name),
-			Replicas:       replicas,
+			JobName: fmt.Sprintf("%s-job", name),
+			Command: []string{"echo", "hello world"},
 		},
 	}
 }
@@ -91,18 +91,18 @@ func (f *fixture) newController(ctx context.Context) (*Controller, informers.Sha
 	k8sI := kubeinformers.NewSharedInformerFactory(f.kubeclient, noResyncPeriodFunc())
 
 	c := NewController(ctx, f.kubeclient, f.client,
-		k8sI.Apps().V1().Deployments(), i.Samplecontroller().V1alpha1().Foos())
+		k8sI.Batch().V1().Jobs(), i.Samplecontroller().V1alpha1().Foos())
 
 	c.foosSynced = alwaysReady
-	c.deploymentsSynced = alwaysReady
+	c.jobSynced = alwaysReady
 	c.recorder = &record.FakeRecorder{}
 
 	for _, f := range f.fooLister {
 		i.Samplecontroller().V1alpha1().Foos().Informer().GetIndexer().Add(f)
 	}
 
-	for _, d := range f.deploymentLister {
-		k8sI.Apps().V1().Deployments().Informer().GetIndexer().Add(d)
+	for _, d := range f.jobLister {
+		k8sI.Batch().V1().Jobs().Informer().GetIndexer().Add(d)
 	}
 
 	return c, i, k8sI
@@ -217,8 +217,8 @@ func filterInformerActions(actions []core.Action) []core.Action {
 		if len(action.GetNamespace()) == 0 &&
 			(action.Matches("list", "foos") ||
 				action.Matches("watch", "foos") ||
-				action.Matches("list", "deployments") ||
-				action.Matches("watch", "deployments")) {
+				action.Matches("list", "jobs") ||
+				action.Matches("watch", "jobs")) {
 			continue
 		}
 		ret = append(ret, action)
@@ -227,17 +227,12 @@ func filterInformerActions(actions []core.Action) []core.Action {
 	return ret
 }
 
-func (f *fixture) expectCreateDeploymentAction(d *apps.Deployment) {
-	f.kubeactions = append(f.kubeactions, core.NewCreateAction(schema.GroupVersionResource{Resource: "deployments"}, d.Namespace, d))
+func (f *fixture) expectCreateJobAction(d *batchv1.Job) {
+	f.kubeactions = append(f.kubeactions, core.NewCreateAction(schema.GroupVersionResource{Resource: "jobs"}, d.Namespace, d))
 }
 
-func (f *fixture) expectUpdateDeploymentAction(d *apps.Deployment) {
-	f.kubeactions = append(f.kubeactions, core.NewUpdateAction(schema.GroupVersionResource{Resource: "deployments"}, d.Namespace, d))
-}
-
-func (f *fixture) expectUpdateFooStatusAction(foo *samplecontroller.Foo) {
-	action := core.NewUpdateSubresourceAction(schema.GroupVersionResource{Resource: "foos"}, "status", foo.Namespace, foo)
-	f.actions = append(f.actions, action)
+func (f *fixture) expectUpdateJobAction(d *batchv1.Job) {
+	f.kubeactions = append(f.kubeactions, core.NewUpdateAction(schema.GroupVersionResource{Resource: "jobs"}, d.Namespace, d))
 }
 
 func getKey(foo *samplecontroller.Foo, t *testing.T) string {
@@ -249,70 +244,47 @@ func getKey(foo *samplecontroller.Foo, t *testing.T) string {
 	return key
 }
 
-func TestCreatesDeployment(t *testing.T) {
+func TestCreatesJob(t *testing.T) {
 	f := newFixture(t)
-	foo := newFoo("test", int32Ptr(1))
+	foo := newFoo("test")
 	_, ctx := ktesting.NewTestContext(t)
 
 	f.fooLister = append(f.fooLister, foo)
 	f.objects = append(f.objects, foo)
 
-	expDeployment := newDeployment(foo)
-	f.expectCreateDeploymentAction(expDeployment)
-	f.expectUpdateFooStatusAction(foo)
+	expJob := newJob(foo)
+	f.expectCreateJobAction(expJob)
 
 	f.run(ctx, getKey(foo, t))
 }
 
 func TestDoNothing(t *testing.T) {
 	f := newFixture(t)
-	foo := newFoo("test", int32Ptr(1))
+	foo := newFoo("test")
 	_, ctx := ktesting.NewTestContext(t)
 
-	d := newDeployment(foo)
+	d := newJob(foo)
 
 	f.fooLister = append(f.fooLister, foo)
 	f.objects = append(f.objects, foo)
-	f.deploymentLister = append(f.deploymentLister, d)
+	f.jobLister = append(f.jobLister, d)
 	f.kubeobjects = append(f.kubeobjects, d)
 
-	f.expectUpdateFooStatusAction(foo)
-	f.run(ctx, getKey(foo, t))
-}
-
-func TestUpdateDeployment(t *testing.T) {
-	f := newFixture(t)
-	foo := newFoo("test", int32Ptr(1))
-	_, ctx := ktesting.NewTestContext(t)
-
-	d := newDeployment(foo)
-
-	// Update replicas
-	foo.Spec.Replicas = int32Ptr(2)
-	expDeployment := newDeployment(foo)
-
-	f.fooLister = append(f.fooLister, foo)
-	f.objects = append(f.objects, foo)
-	f.deploymentLister = append(f.deploymentLister, d)
-	f.kubeobjects = append(f.kubeobjects, d)
-
-	f.expectUpdateFooStatusAction(foo)
-	f.expectUpdateDeploymentAction(expDeployment)
 	f.run(ctx, getKey(foo, t))
 }
 
 func TestNotControlledByUs(t *testing.T) {
 	f := newFixture(t)
-	foo := newFoo("test", int32Ptr(1))
+	foo := newFoo("test")
 	_, ctx := ktesting.NewTestContext(t)
 
-	d := newDeployment(foo)
+	d := newJob(foo)
 
 	d.ObjectMeta.OwnerReferences = []metav1.OwnerReference{}
 
 	f.fooLister = append(f.fooLister, foo)
 	f.objects = append(f.objects, foo)
-	f.deploymentLister = append(f.deploymentLister, d)
+	f.jobLister = append(f.jobLister, d)
 	f.kubeobjects = append(f.kubeobjects, d)
 
 	f.runExpectError(ctx, getKey(foo, t))

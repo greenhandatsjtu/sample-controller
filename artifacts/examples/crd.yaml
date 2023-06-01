@@ -20,17 +20,12 @@ spec:
             spec:
               type: object
               properties:
-                deploymentName:
+                jobName:
                   type: string
-                replicas:
-                  type: integer
-                  minimum: 1
-                  maximum: 10
-            status:
-              type: object
-              properties:
-                availableReplicas:
-                  type: integer
+                command:
+                  type: array
+                  items:
+                    type: string
   names:
     kind: Foo
     plural: foos

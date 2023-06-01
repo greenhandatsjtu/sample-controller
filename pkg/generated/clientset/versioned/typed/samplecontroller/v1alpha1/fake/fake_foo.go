@@ -101,18 +101,6 @@ func (c *FakeFoos) Update(ctx context.Context, foo *v1alpha1.Foo, opts v1.Update
 	return obj.(*v1alpha1.Foo), err
 }
 
-// UpdateStatus was generated because the type contains a Status member.
-// Add a +genclient:noStatus comment above the type to avoid generating UpdateStatus().
-func (c *FakeFoos) UpdateStatus(ctx context.Context, foo *v1alpha1.Foo, opts v1.UpdateOptions) (*v1alpha1.Foo, error) {
-	obj, err := c.Fake.
-		Invokes(testing.NewUpdateSubresourceAction(foosResource, "status", c.ns, foo), &v1alpha1.Foo{})
-
-	if obj == nil {
-		return nil, err
-	}
-	return obj.(*v1alpha1.Foo), err
-}
-
 // Delete takes name of the foo and deletes it. Returns an error if one occurs.
 func (c *FakeFoos) Delete(ctx context.Context, name string, opts v1.DeleteOptions) error {
 	_, err := c.Fake.
