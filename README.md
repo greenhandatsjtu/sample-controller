@@ -22,7 +22,6 @@ spec:
    ![](images/controller.png)
 
 2.  kubectl创建foo CRD，创建Foo资源example-bar，查看资源，查看Pod，查看Pod logs，输出hello world，删除Foo资源
-
-   ![](images/kubectl.png)
+    ![](images/kubectl.png)
 
    
